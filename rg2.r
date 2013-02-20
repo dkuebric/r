@@ -191,44 +191,74 @@ get_results = function(router_mode, dyno_count, choice_of_two = FALSE, unicorn_w
   return(tmp[, c(6:8, 1:5)])
 }
 
-range_builder = function(min, max, by) {
+
+range_builder = function(min, max, by, steps=c()) {
     r = list(min=min, max=max, by=by)
-    r$s = seq(r$min, r$max, r$by)
+    if (length(steps) == 0) {
+        r$s = seq(r$min, r$max, r$by)
+    } else {
+        r$s = steps
+    }
     r$len = length(r$s)
     r
 }
 
-# test computational-equivalent-power of # of dynos from 10 to 100
-dynos = range_builder(10, 100, 5)
-# ... using worker counts/node
-workers = range_builder(2, 8, 2)
+simulation_series = function(dynos, workers, axis_by_nodes=TRUE) {
+    arr = array(0, c(2, dynos$len, workers$len))
+    labels = c()
 
-arr = array(0, c(2, dynos$len, workers$len))
-labels = c()
-colors = c("black", "green", "red", "blue")
+    d = 1
+    for (num_workers in workers$s) {
+        labels = append(labels, paste(num_workers, "workers", sep=" "))
+        n = 1
+        for (num_dynos in dynos$s) {
+            # approximately "fair" to total computational power
+            fair_d_count = ceiling(num_dynos / num_workers)
+            res = get_results(router_mode = 'naive', dyno_count = fair_d_count, unicorn_workers_per_dyno = num_workers)
 
-d = 1
-for (num_workers in workers$s) {
-    labels = append(labels, paste(num_workers, "workers", sep=" "))
-    n = 1
-    for (num_dynos in dynos$s) {
-        # approximately "fair" to total computational power.. let's see how good
-        fair_d_count = ceiling(num_dynos / num_workers)
-        res = get_results(router_mode = 'naive', dyno_count = fair_d_count, unicorn_workers_per_dyno = num_workers)
-        arr[,n,d] = c(res$dyno_count, res$frac_queued)
-        n = n + 1
+            if (axis_by_nodes) {
+                # compare total # of nodes necessary to achieve fraction, regardless
+                # of workers/node
+                arr[,n,d] = c(res$dyno_count, res$frac_queued)
+            } else {
+                # compare total # of workers (cpu-equivalent) to achieve fraction
+                arr[,n,d] = c(num_dynos, res$frac_queued)
+            }
+            n = n + 1
+        }
+        d = d + 1
     }
-    d = d + 1
+    series = list(arr=arr, labels=labels)
+    series
 }
 
-plot(x=arr[1,,1],
-        y=arr[2,,1],
-        col=colors[1],
-        type='l',
-        main='% of Requests Queued as Function of # of nodes\nrequest lengths as per\nrweibull(shape = 0.8, scale = 79.056)',
-        xlab='# of nodes (eg. dynos)',
-        ylab='fraction of requests queued')
-points(x=arr[1,,2], y=arr[2,,2], col=colors[2], type='l')
-points(x=arr[1,,3], y=arr[2,,3], col=colors[3], type='l')
-points(x=arr[1,,4], y=arr[2,,4], col=colors[4], type='l')
-legend(x=40,y=1, labels, cex=0.8, col=colors, lty=1)
+plot_simulation = function(series, title, xlab, ylab) {
+    colors = rainbow(length(series$arr[1,1,]))
+    arr = series$arr
+    labels = series$labels
+    plot(x=arr[1,,1], y=arr[2,,1],
+            col=colors[1],
+            type='l',
+            main=title,
+            xlab=xlab,
+            ylab=ylab)
+    lines(x=arr[1,,2], y=arr[2,,2], col=colors[2], type='l')
+    lines(x=arr[1,,3], y=arr[2,,3], col=colors[3], type='l')
+    lines(x=arr[1,,4], y=arr[2,,4], col=colors[4], type='l')
+    legend(x=max(arr[1,,1])*.75,y=1, labels, cex=0.8, col=colors, lty=1)
+}
+
+## usage:
+
+# test computational-equivalent-power of # of dynos from 10 to 100
+dynos = range_builder(5, 100, 5)
+# ... using worker counts/node
+workers = range_builder(1, 8, 2, c(1,2,4,8))
+
+orig = simulation_series(dynos, workers, TRUE)
+by_work = simulation_series(dynos, workers, FALSE)
+
+title = "% of Requests Queued as Function of # of workers\nrequest lengths as per\nrweibull(shape = 0.8, scale = 79.056)"
+xlab = "# of workers (across all nodes)"
+ylab = "fraction of requests queued"
+plot_simulation(by_work, title, xlab, ylab)
